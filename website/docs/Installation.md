@@ -8,8 +8,13 @@ When not using a docker container, we recommend using a virtual environment to i
 
 You can create a virtual environment with `venv` as below:
 ```bash
-python3 -m venv autogen
-source autogen/bin/activate
+python3 -m venv pyautogen
+source pyautogen/bin/activate
+```
+
+The following command will deactivate the current `venv` environment:
+```bash
+deactivate
 ```
 
 ### Option 2: conda
@@ -17,15 +22,20 @@ source autogen/bin/activate
 Another option is with `Conda`, Conda works better at solving dependency conflicts than pip. You can install it by following [this doc](https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html),
 and then create a virtual environment as below:
 ```bash
-conda create -n autogen python=3.10  # python 3.10 is recommended as it's stable and not too old
-conda activate autogen
+conda create -n pyautogen python=3.10  # python 3.10 is recommended as it's stable and not too old
+conda activate pyautogen
+```
+
+The following command will deactivate the current `conda` environment:
+```bash
+conda deactivate
 ```
 
 Now, you're ready to install AutoGen in the virtual environment you've just created.
 
 ## Python
 
-AutoGen requires **Python version >= 3.8**. It can be installed from pip:
+AutoGen requires **Python version >= 3.8, < 3.12**. It can be installed from pip:
 
 ```bash
 pip install pyautogen
@@ -39,6 +49,24 @@ or conda:
 conda install pyautogen -c conda-forge
 ``` -->
 
+### Migration guide to v0.2
+
+openai v1 is a total rewrite of the library with many breaking changes. For example, the inference requires instantiating a client, instead of using a global class method.
+Therefore, some changes are required for users of `pyautogen<0.2`.
+
+- `api_base` -> `base_url`, `request_timeout` -> `timeout` in `llm_config` and `config_list`. `max_retry_period` and `retry_wait_time` are deprecated. `max_retries` can be set for each client.
+- MathChat, TeachableAgent are unsupported until they are tested in future release.
+- `autogen.Completion` and `autogen.ChatCompletion` are deprecated. The essential functionalities are moved to `autogen.OpenAIWrapper`:
+```python
+from autogen import OpenAIWrapper
+client = OpenAIWrapper(config_list=config_list)
+response = client.create(messages=[{"role": "user", "content": "2+2="}])
+print(client.extract_text_or_function_call(response))
+```
+- Inference parameter tuning and inference logging features are currently unavailable in `OpenAIWrapper`. Logging will be added in a future release.
+Inference parameter tuning can be done via [`flaml.tune`](https://microsoft.github.io/FLAML/docs/Use-Cases/Tune-User-Defined-Function).
+- `use_cache` is removed as a kwarg in `OpenAIWrapper.create()` for being automatically decided by `seed`: int | None.
+
 ### Optional Dependencies
 * docker
 
@@ -51,9 +79,9 @@ pip install docker
 
 * blendsearch
 
-AutoGen offers a cost-effective hyperparameter optimization technique [EcoOptiGen](https://arxiv.org/abs/2303.04673) for tuning Large Language Models. Please install with the [blendsearch] option to use it.
+`pyautogen<0.2` offers a cost-effective hyperparameter optimization technique [EcoOptiGen](https://arxiv.org/abs/2303.04673) for tuning Large Language Models. Please install with the [blendsearch] option to use it.
 ```bash
-pip install "pyautogen[blendsearch]"
+pip install "pyautogen[blendsearch]<0.2"
 ```
 
 Example notebooks:
@@ -62,9 +90,9 @@ Example notebooks:
 
 * retrievechat
 
-AutoGen supports retrieval-augmented generation tasks such as question answering and code generation with RAG agents. Please install with the [retrievechat] option to use it.
+`pyautogen<0.2` supports retrieval-augmented generation tasks such as question answering and code generation with RAG agents. Please install with the [retrievechat] option to use it.
 ```bash
-pip install "pyautogen[retrievechat]"
+pip install "pyautogen[retrievechat]<0.2"
 ```
 
 Example notebooks:
@@ -73,9 +101,9 @@ Example notebooks:
 
 * mathchat
 
-AutoGen offers an experimental agent for math problem solving. Please install with the [mathchat] option to use it.
+`pyautogen<0.2` offers an experimental agent for math problem solving. Please install with the [mathchat] option to use it.
 ```bash
-pip install "pyautogen[mathchat]"
+pip install "pyautogen[mathchat]<0.2"
 ```
 
 Example notebooks:
