@@ -1,14 +1,15 @@
-import subprocess
-import sys
+import logging
 import os
 import pathlib
-from typing import List, Dict, Tuple, Optional, Union, Callable
 import re
+import subprocess
+import sys
 import time
-from hashlib import md5
-import logging
-from autogen import oai
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from hashlib import md5
+from typing import Callable, Dict, List, Optional, Tuple, Union
+
+from autogen import oai
 
 try:
     import docker
@@ -18,7 +19,15 @@ except ImportError:
 DEFAULT_MODEL = "gpt-4"
 FAST_MODEL = "gpt-3.5-turbo"
 # Regular expression for finding a code block
-CODE_BLOCK_PATTERN = r"```(\w*)\n(.*?)\n```"
+# ```[ \t]*(\w+)?[ \t]*\r?\n(.*?)[ \t]*\r?\n``` Matches multi-line code blocks.
+#   The [ \t]* matches the potential spaces before language name.
+#   The (\w+)? matches the language, where the ? indicates it is optional.
+#   The [ \t]* matches the potential spaces (not newlines) after language name.
+#   The \r?\n makes sure there is a linebreak after ```.
+#   The (.*?) matches the code itself (non-greedy).
+#   The \r?\n makes sure there is a linebreak before ```.
+#   The [ \t]* matches the potential spaces before closing ``` (the spec allows indentation).
+CODE_BLOCK_PATTERN = r"```[ \t]*(\w+)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```"
 WORKING_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "extensions")
 UNKNOWN = "unknown"
 TIMEOUT_MSG = "Timeout"
@@ -27,6 +36,47 @@ WIN32 = sys.platform == "win32"
 PATH_SEPARATOR = WIN32 and "\\" or "/"
 
 logger = logging.getLogger(__name__)
+
+
+def content_str(content: Union[str, List, None]) -> str:
+    """Converts `content` into a string format.
+
+    This function processes content that may be a string, a list of mixed text and image URLs, or None,
+    and converts it into a string. Text is directly appended to the result string, while image URLs are
+    represented by a placeholder image token. If the content is None, an empty string is returned.
+
+    Args:
+        - content (Union[str, List, None]): The content to be processed. Can be a string, a list of dictionaries
+                                      representing text and image URLs, or None.
+
+    Returns:
+        str: A string representation of the input content. Image URLs are replaced with an image token.
+
+    Note:
+    - The function expects each dictionary in the list to have a "type" key that is either "text" or "image_url".
+      For "text" type, the "text" key's value is appended to the result. For "image_url", an image token is appended.
+    - This function is useful for handling content that may include both text and image references, especially
+      in contexts where images need to be represented as placeholders.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        raise TypeError(f"content must be None, str, or list, but got {type(content)}")
+
+    rst = ""
+    for item in content:
+        if not isinstance(item, dict):
+            raise TypeError("Wrong content format: every element should be dict if the content is a list.")
+        assert "type" in item, "Wrong content format. Missing 'type' key in content's dict."
+        if item["type"] == "text":
+            rst += item["text"]
+        elif item["type"] == "image_url":
+            rst += "<image>"
+        else:
+            raise ValueError(f"Wrong content format: unknown type {item['type']} within the content")
+    return rst
 
 
 def infer_lang(code):
@@ -45,13 +95,16 @@ def infer_lang(code):
         return UNKNOWN
 
 
+# TODO: In the future move, to better support https://spec.commonmark.org/0.30/#fenced-code-blocks
+#       perhaps by using a full Markdown parser.
 def extract_code(
-    text: str, pattern: str = CODE_BLOCK_PATTERN, detect_single_line_code: bool = False
+    text: Union[str, List], pattern: str = CODE_BLOCK_PATTERN, detect_single_line_code: bool = False
 ) -> List[Tuple[str, str]]:
     """Extract code from a text.
 
     Args:
-        text (str): The text to extract code from.
+        text (str or List): The content to extract code from. The content can be
+            a string or a list, as returned by standard GPT or multimodal GPT.
         pattern (str, optional): The regular expression pattern for finding the
             code block. Defaults to CODE_BLOCK_PATTERN.
         detect_single_line_code (bool, optional): Enable the new feature for
@@ -62,15 +115,14 @@ def extract_code(
           If there is no code block in the input text, the language would be "unknown".
           If there is code block but the language is not specified, the language would be "".
     """
+    text = content_str(text)
     if not detect_single_line_code:
         match = re.findall(pattern, text, flags=re.DOTALL)
         return match if match else [(UNKNOWN, text)]
 
     # Extract both multi-line and single-line code block, separated by the | operator
-    # `{3}(\w+)?\s*([\s\S]*?)`{3}: Matches multi-line code blocks.
-    #    The (\w+)? matches the language, where the ? indicates it is optional.
     # `([^`]+)`: Matches inline code.
-    code_pattern = re.compile(r"`{3}(\w+)?\s*([\s\S]*?)`{3}|`([^`]+)`")
+    code_pattern = re.compile(CODE_BLOCK_PATTERN + r"|`([^`]+)`")
     code_blocks = code_pattern.findall(text)
 
     # Extract the individual code blocks and languages from the matched groups
@@ -493,11 +545,11 @@ def eval_function_completions(
 _FUNC_COMPLETION_PROMPT = "# Python 3{definition}"
 _FUNC_COMPLETION_STOP = ["\nclass", "\ndef", "\nif", "\nprint"]
 _IMPLEMENT_CONFIGS = [
-    {"model": FAST_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "temperature": 0, "seed": 0},
-    {"model": FAST_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 7, "seed": 0},
-    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "temperature": 0, "seed": 1},
-    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 2, "seed": 2},
-    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 1, "seed": 2},
+    {"model": FAST_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "temperature": 0, "cache_seed": 0},
+    {"model": FAST_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 7, "cache_seed": 0},
+    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "temperature": 0, "cache_seed": 1},
+    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 2, "cache_seed": 2},
+    {"model": DEFAULT_MODEL, "prompt": _FUNC_COMPLETION_PROMPT, "stop": _FUNC_COMPLETION_STOP, "n": 1, "cache_seed": 2},
 ]
 
 

@@ -6,9 +6,7 @@ There are a number of benefits of using `autogen` to perform inference: performa
 
 ## Tune Inference Parameters (for openai<1)
 
-*Links to notebook examples:*
-* [Optimize for Code Generation](https://github.com/microsoft/autogen/blob/main/notebook/oai_completion.ipynb)
-* [Optimize for Math](https://github.com/microsoft/autogen/blob/main/notebook/oai_chatgpt_gpt4.ipynb)
+Find a list of examples in this page: [Tune Inference Parameters Examples](../Examples.md#tune-inference-hyperparameters)
 
 ### Choices to optimize
 
@@ -121,13 +119,15 @@ client = OpenAIWrapper()
 # ChatCompletion
 response = client.create(messages=[{"role": "user", "content": "2+2="}], model="gpt-3.5-turbo")
 # extract the response text
-print(client.extract_text_or_function_call(response))
+print(client.extract_text_or_completion_object(response))
+# get cost of this completion
+print(response.cost)
 # Azure OpenAI endpoint
 client = OpenAIWrapper(api_key=..., base_url=..., api_version=..., api_type="azure")
 # Completion
 response = client.create(prompt="2+2=", model="gpt-3.5-turbo-instruct")
 # extract the response text
-print(client.extract_text_or_function_call(response))
+print(client.extract_text_or_completion_object(response))
 
 ```
 
@@ -135,21 +135,56 @@ For local LLMs, one can spin up an endpoint using a package like [FastChat](http
 
 <!-- When only working with the chat-based models, `autogen.ChatCompletion` can be used. It also does automatic conversion from prompt to messages, if prompt is provided instead of messages. -->
 
+## Usage Summary
+
+The `OpenAIWrapper` from `autogen` tracks token counts and costs of your API calls. Use the `create()` method to initiate requests and `print_usage_summary()` to retrieve a detailed usage report, including total cost and token usage for both cached and actual requests.
+
+- `mode=["actual", "total"]` (default): print usage summary for all completions and non-caching completions.
+- `mode='actual'`: only print non-cached usage.
+- `mode='total'`: only print all usage (including cache).
+
+Reset your session's usage data with `clear_usage_summary()` when needed. [View Notebook](https://github.com/microsoft/autogen/blob/main/notebook/oai_client_cost.ipynb)
+
+Example usage:
+```python
+from autogen import OpenAIWrapper
+
+client = OpenAIWrapper()
+client.create(messages=[{"role": "user", "content": "Python learning tips."}], model="gpt-3.5-turbo")
+client.print_usage_summary()  # Display usage
+client.clear_usage_summary()  # Reset usage data
+```
+
+Sample output:
+```
+Usage summary excluding cached usage:
+Total cost: 0.00015
+* Model 'gpt-3.5-turbo': cost: 0.00015, prompt_tokens: 25, completion_tokens: 58, total_tokens: 83
+
+Usage summary including cached usage:
+Total cost: 0.00027
+* Model 'gpt-3.5-turbo': cost: 0.00027, prompt_tokens: 50, completion_tokens: 100, total_tokens: 150
+```
+
 ## Caching
 
-API call results are cached locally and reused when the same request is issued. This is useful when repeating or continuing experiments for reproducibility and cost saving. It still allows controlled randomness by setting the "seed" specified in `OpenAIWrapper.create()` or the constructor of `OpenAIWrapper`.
+API call results are cached locally and reused when the same request is issued. This is useful when repeating or continuing experiments for reproducibility and cost saving. It still allows controlled randomness by setting the "cache_seed" specified in `OpenAIWrapper.create()` or the constructor of `OpenAIWrapper`.
 
 ```python
-client = OpenAIWrapper(seed=...)
+client = OpenAIWrapper(cache_seed=...)
 client.create(...)
 ```
 
 ```python
 client = OpenAIWrapper()
-client.create(seed=..., ...)
+client.create(cache_seed=..., ...)
 ```
 
-Caching is enabled by default with seed 41. To disable it please set `seed` to None.
+Caching is enabled by default with cache_seed 41. To disable it please set `cache_seed` to None.
+
+_NOTE_. openai v1.1 introduces a new param `seed`. The difference between autogen's `cache_seed` and openai's `seed` is that:
+* autogen uses local disk cache to guarantee the exactly same output is produced for the same input and when cache is hit, no openai api call will be made.
+* openai's `seed` is a best-effort deterministic sampling with no guarantee of determinism. When using openai's `seed` with `cache_seed` set to None, even for the same input, an openai api call will be made and there is no guarantee for getting exactly the same output.
 
 ## Error handling
 
@@ -205,7 +240,7 @@ Another type of error is that the returned response does not satisfy a requireme
 
 ```python
 def valid_json_filter(response, **_):
-    for text in OpenAIWrapper.extract_text_or_function_call(response):
+    for text in OpenAIWrapper.extract_text_or_completion_object(response):
         try:
             json.loads(text)
             return True
